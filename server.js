@@ -12,15 +12,19 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
+// Allowed origins including the new frontend
+const allowedOrigins = [
+  'https://dta-client.vercel.app',
+  'https://dta-admin.vercel.app',
+  'https://dailytaskacademy.vercel.app', // ✅ Newly added
+  'http://localhost:3000',
+  'http://localhost:3001'
+];
+
 // Initialize Socket.IO with CORS settings
 const io = socketIo(server, {
   cors: {
-    origin: [
-      'https://dta-client.vercel.app',
-      'https://dta-admin.vercel.app',
-      'http://localhost:3000',
-      'http://localhost:3001'
-    ],
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true
   }
@@ -28,15 +32,12 @@ const io = socketIo(server, {
 
 // Middleware
 app.use(cors({
-  origin: [
-    'https://dta-client.vercel.app',
-    'https://dta-admin.vercel.app',
-    'http://localhost:3000',
-    'http://localhost:3001'
-  ],
+  origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
+
+app.options('*', cors()); // ✅ Handle preflight requests
 
 app.use(express.json());
 
