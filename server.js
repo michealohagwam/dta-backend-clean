@@ -8,26 +8,47 @@ const socketIo = require('socket.io');
 // Load environment variables
 dotenv.config();
 
-// Initialize app and server
+// Initialize Express app and HTTP server
 const app = express();
 const server = http.createServer(app);
+
+// Initialize Socket.IO with CORS settings
 const io = socketIo(server, {
   cors: {
-    origin: '*', // Change to your frontend domain in production
-    methods: ['GET', 'POST']
+    origin: [
+      'https://dta-client.vercel.app',
+      'https://dta-admin.vercel.app',
+      'http://localhost:3000',
+      'http://localhost:3001'
+    ],
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://dta-client.vercel.app',
+    'https://dta-admin.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:3001'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
+}));
+
 app.use(express.json());
 
-// Connect to MongoDB
+// MongoDB Connection
 console.log('Connecting to MongoDB...');
-mongoose.connect(process.env.MONGODB_URI).then(() => {
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
   console.log('✅ MongoDB Connected');
 }).catch(err => {
-  console.error('MongoDB connection error:', err);
+  console.error('❌ MongoDB connection error:', err);
 });
 
 // Routes
@@ -37,18 +58,21 @@ app.use('/api/withdrawals', require('./routes/withdrawal'));
 app.use('/api/referrals', require('./routes/referral'));
 app.use('/api/admin', require('./routes/admin'));
 
-
-// Make io accessible in routes
+// Make Socket.IO accessible in routes
 app.set('io', io);
 
 // WebSocket Events
 io.on('connection', (socket) => {
-  console.log('A user connected');
+  console.log('🔌 A user connected');
+
   socket.on('disconnect', () => {
-    console.log('A user disconnected');
+    console.log('❌ A user disconnected');
   });
+
+  // You can define custom events here as needed:
+  // socket.on('some-event', (data) => { ... });
 });
 
-// Start server
+// Start Server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
