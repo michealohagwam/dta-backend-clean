@@ -11,6 +11,8 @@ const { loginUser } = require('../controllers/userController');
 // ✅ Utils
 const sendEmail = require('../utils/sendEmail');
 
+const jwt = require('jsonwebtoken'); // for login token
+
 // ✅ Models
 const User = require('../models/User');
 const PaymentMethod = require('../models/PaymentMethod');
@@ -122,6 +124,54 @@ router.get('/transactions', authMiddleware, async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+
+// ✅ Signup
+router.post('/signup', async (req, res) => {
+  try {
+    const { fullName, email, password } = req.body;
+
+    if (!fullName || !email || !password) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'Email already in use' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = new User({
+      fullName,
+      email,
+      password: hashedPassword,
+    });
+
+    await newUser.save();
+
+    // Send welcome email (optional)
+    await sendEmail(email, 'Welcome to Daily Task Academy', `<p>Hello ${fullName}, welcome aboard!</p>`);
+
+    // Sign token for login
+    const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+    res.status(201).json({
+      message: 'User registered successfully',
+      token,
+      user: {
+        id: newUser._id,
+        fullName: newUser.fullName,
+        email: newUser.email,
+      }
+    });
+
+  } catch (err) {
+    console.error('Signup error:', err.message);
+    res.status(500).json({ message: 'Server error. Please try again.' });
+  }
+});
+
 
 // ✅ Check username availability
 router.get('/check-username', async (req, res) => {
