@@ -2,32 +2,49 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-
-// ✅ Middleware
+const rateLimit = require('express-rate-limit');
 const { authMiddleware } = require('../middleware/auth');
-
-// ✅ Controllers
-const { loginUser } = require('../controllers/userController');
-
-// ✅ Utils
 const sendEmail = require('../utils/sendEmail');
-
-// ✅ Models
 const User = require('../models/User');
 const PaymentMethod = require('../models/PaymentMethod');
 const Withdrawal = require('../models/Withdrawal');
 const Upgrade = require('../models/Upgrade');
 
+// ✅ Controllers
+const { loginUser } = require('../controllers/userController');
+
 // ✅ Login
 router.post('/login', loginUser);
 
-// ✅ Signup
-router.post('/signup', async (req, res) => {
+// ✅ Signup with validation, rate limiting, and IP tracking
+const signupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Too many signup attempts from this IP, please try again later.'
+});
+
+router.post('/signup', signupLimiter, async (req, res) => {
   try {
     const { name, username, email, phone, password, referralCode, level, amount } = req.body;
 
     if (!name || !username || !email || !phone || !password || !level) {
       return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const phoneRegex = /^[0-9]{10,15}$/;
+    const usernameRegex = /^[a-zA-Z0-9_]{3,20}$/;
+
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ message: 'Invalid email format' });
+    }
+
+    if (!phoneRegex.test(phone)) {
+      return res.status(400).json({ message: 'Invalid phone number format' });
+    }
+
+    if (!usernameRegex.test(username)) {
+      return res.status(400).json({ message: 'Invalid username format' });
     }
 
     const existingUser = await User.findOne({ email });
@@ -41,6 +58,7 @@ router.post('/signup', async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const signupIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
     const newUser = new User({
       fullName: name,
@@ -53,7 +71,8 @@ router.post('/signup', async (req, res) => {
       status: 'pending',
       balance: { available: 0, pending: 0 },
       profileSet: false,
-      tasksCompleted: 0
+      tasksCompleted: 0,
+      signupIP
     });
 
     await newUser.save();
