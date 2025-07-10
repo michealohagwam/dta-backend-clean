@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 
 // ✅ Middleware
 const { authMiddleware } = require('../middleware/auth');
@@ -11,8 +12,6 @@ const { loginUser } = require('../controllers/userController');
 // ✅ Utils
 const sendEmail = require('../utils/sendEmail');
 
-const jwt = require('jsonwebtoken'); // for login token
-
 // ✅ Models
 const User = require('../models/User');
 const PaymentMethod = require('../models/PaymentMethod');
@@ -21,6 +20,66 @@ const Upgrade = require('../models/Upgrade');
 
 // ✅ Login
 router.post('/login', loginUser);
+
+// ✅ Signup
+router.post('/signup', async (req, res) => {
+  try {
+    const { name, username, email, phone, password, referralCode, level, amount } = req.body;
+
+    if (!name || !username || !email || !phone || !password || !level) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'Email already in use' });
+    }
+
+    const existingUsername = await User.findOne({ username });
+    if (existingUsername) {
+      return res.status(400).json({ message: 'Username already taken' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = new User({
+      fullName: name,
+      username,
+      email,
+      contact: phone,
+      password: hashedPassword,
+      referredBy: referralCode || null,
+      level,
+      status: 'pending',
+      balance: { available: 0, pending: 0 },
+      profileSet: false,
+      tasksCompleted: 0
+    });
+
+    await newUser.save();
+
+    await sendEmail(email, 'Welcome to Daily Task Academy', `<p>Hello ${name}, welcome! Please complete your payment of ₦${amount} to activate your account.</p>`);
+
+    const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+    res.status(201).json({
+      message: 'User registered successfully',
+      token,
+      user: {
+        id: newUser._id,
+        fullName: newUser.fullName,
+        username: newUser.username,
+        email: newUser.email,
+        contact: newUser.contact,
+        level: newUser.level,
+        status: newUser.status
+      }
+    });
+  } catch (err) {
+    console.error('Signup error:', err.message);
+    res.status(500).json({ message: 'Server error. Please try again.' });
+  }
+});
 
 // ✅ Get user profile
 router.get('/profile', authMiddleware, async (req, res) => {
@@ -83,16 +142,11 @@ router.post('/payment-methods', authMiddleware, async (req, res) => {
       details,
     });
     await paymentMethod.save();
-
-    console.log('Saved Payment Method:', paymentMethod); // 🔍 Log here
-
-    res.status(201).json(paymentMethod); // Send full saved object
+    res.status(201).json(paymentMethod);
   } catch (error) {
-    console.error('Error saving payment method:', error.message);
     res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 // ✅ Delete payment method
 router.delete('/payment-methods/:id', authMiddleware, async (req, res) => {
@@ -124,54 +178,6 @@ router.get('/transactions', authMiddleware, async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
-
-
-// ✅ Signup
-router.post('/signup', async (req, res) => {
-  try {
-    const { fullName, email, password } = req.body;
-
-    if (!fullName || !email || !password) {
-      return res.status(400).json({ message: 'All fields are required' });
-    }
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: 'Email already in use' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const newUser = new User({
-      fullName,
-      email,
-      password: hashedPassword,
-    });
-
-    await newUser.save();
-
-    // Send welcome email (optional)
-    await sendEmail(email, 'Welcome to Daily Task Academy', `<p>Hello ${fullName}, welcome aboard!</p>`);
-
-    // Sign token for login
-    const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-
-    res.status(201).json({
-      message: 'User registered successfully',
-      token,
-      user: {
-        id: newUser._id,
-        fullName: newUser.fullName,
-        email: newUser.email,
-      }
-    });
-
-  } catch (err) {
-    console.error('Signup error:', err.message);
-    res.status(500).json({ message: 'Server error. Please try again.' });
-  }
-});
-
 
 // ✅ Check username availability
 router.get('/check-username', async (req, res) => {
@@ -248,7 +254,6 @@ router.get('/referrals', authMiddleware, async (req, res) => {
     const referrals = await User.find({ referredBy: req.user.id }).select('fullName email username status');
     res.json(referrals);
   } catch (error) {
-    console.error('Referrals error:', error.message);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -256,7 +261,6 @@ router.get('/referrals', authMiddleware, async (req, res) => {
 // ✅ Request upgrade
 router.post('/upgrade', authMiddleware, async (req, res) => {
   const { level, amount } = req.body;
-
   try {
     if (!level || !amount) {
       return res.status(400).json({ message: 'Level and amount are required' });
@@ -279,7 +283,6 @@ router.post('/upgrade', authMiddleware, async (req, res) => {
     await sendEmail(user.email, 'Upgrade Requested', `<p>Your request to upgrade to level ${level} with ₦${amount} has been received and is pending confirmation.</p>`);
     res.json({ message: 'Upgrade request submitted', level: user.level });
   } catch (error) {
-    console.error('Upgrade error:', error.message);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -287,7 +290,6 @@ router.post('/upgrade', authMiddleware, async (req, res) => {
 // ✅ Request withdrawal
 router.post('/withdrawals', authMiddleware, async (req, res) => {
   const { amount } = req.body;
-
   try {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -318,7 +320,6 @@ router.post('/withdrawals', authMiddleware, async (req, res) => {
     await sendEmail(user.email, 'Withdrawal Request Submitted', `<p>You have requested a withdrawal of ₦${amount}. It is now pending approval.</p>`);
     res.status(201).json({ message: 'Withdrawal request submitted', withdrawalId: withdrawal._id });
   } catch (error) {
-    console.error('Withdrawal error:', error.message);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -330,7 +331,7 @@ router.post('/tasks', authMiddleware, async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     user.tasksCompleted += 1;
-    user.balance.available += 500; // reward per task
+    user.balance.available += 500;
     await user.save();
 
     res.status(200).json({
@@ -339,7 +340,6 @@ router.post('/tasks', authMiddleware, async (req, res) => {
       newBalance: user.balance.available,
     });
   } catch (error) {
-    console.error('Task completion error:', error.message);
     res.status(500).json({ message: 'Server error' });
   }
 });
