@@ -1,28 +1,42 @@
 const express = require('express');
 const router = express.Router();
+
+// Dependencies
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
-const { authMiddleware } = require('../middleware/auth');
 const sendEmail = require('../utils/sendEmail');
+
+// Models
 const User = require('../models/User');
 const PaymentMethod = require('../models/PaymentMethod');
 const Withdrawal = require('../models/Withdrawal');
 const Upgrade = require('../models/Upgrade');
+const EmailLog = require('../models/EmailLog');
 
-// ✅ Controllers
+// Middleware & Controllers
+const { authMiddleware } = require('../middleware/auth');
 const { loginUser } = require('../controllers/userController');
 
-// ✅ Login
-router.post('/login', loginUser);
+// Utilities
+const generateVerificationCode = () =>
+  Math.floor(100000 + Math.random() * 900000).toString();
 
-// ✅ Signup with validation, rate limiting, and IP tracking
+// Rate Limiting
 const signupLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10,
-  message: 'Too many signup attempts from this IP, please try again later.'
+  message: 'Too many signup attempts from this IP. Please try again later.',
 });
 
+// ====================
+// 🔐 Authentication
+// ====================
+
+// Login
+router.post('/login', loginUser);
+
+// Signup
 router.post('/signup', signupLimiter, async (req, res) => {
   try {
     const { name, username, email, phone, password, referralCode, level, amount } = req.body;
@@ -35,29 +49,15 @@ router.post('/signup', signupLimiter, async (req, res) => {
     const phoneRegex = /^[0-9]{10,15}$/;
     const usernameRegex = /^[a-zA-Z0-9_]{3,20}$/;
 
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ message: 'Invalid email format' });
-    }
+    if (!emailRegex.test(email)) return res.status(400).json({ message: 'Invalid email format' });
+    if (!phoneRegex.test(phone)) return res.status(400).json({ message: 'Invalid phone number format' });
+    if (!usernameRegex.test(username)) return res.status(400).json({ message: 'Invalid username format' });
 
-    if (!phoneRegex.test(phone)) {
-      return res.status(400).json({ message: 'Invalid phone number format' });
-    }
-
-    if (!usernameRegex.test(username)) {
-      return res.status(400).json({ message: 'Invalid username format' });
-    }
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: 'Email already in use' });
-    }
-
-    const existingUsername = await User.findOne({ username });
-    if (existingUsername) {
-      return res.status(400).json({ message: 'Username already taken' });
-    }
+    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+    if (existingUser) return res.status(400).json({ message: 'Email or username already exists' });
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const verificationCode = generateVerificationCode();
     const signupIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
     const newUser = new User({
@@ -72,27 +72,24 @@ router.post('/signup', signupLimiter, async (req, res) => {
       balance: { available: 0, pending: 0 },
       profileSet: false,
       tasksCompleted: 0,
-      signupIP
+      signupIP,
+      verificationCode,
     });
 
     await newUser.save();
 
-    await sendEmail(email, 'Welcome to Daily Task Academy', `<p>Hello ${name}, welcome! Please complete your payment of ₦${amount} to activate your account.</p>`);
+    await sendEmail(email, 'Email Verification - Daily Task Academy', `
+      <p>Hello ${name},</p>
+      <p>Your verification code is: <b>${verificationCode}</b></p>
+    `);
+
+    await EmailLog.create({ type: 'verification', recipient: email });
 
     const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     res.status(201).json({
-      message: 'User registered successfully',
+      message: `User registered successfully. Please verify your email.`,
       token,
-      user: {
-        id: newUser._id,
-        fullName: newUser.fullName,
-        username: newUser.username,
-        email: newUser.email,
-        contact: newUser.contact,
-        level: newUser.level,
-        status: newUser.status
-      }
     });
   } catch (err) {
     console.error('Signup error:', err.message);
@@ -100,7 +97,30 @@ router.post('/signup', signupLimiter, async (req, res) => {
   }
 });
 
-// ✅ Get user profile
+// Verify Email
+router.post('/verify-email', async (req, res) => {
+  const { code } = req.body;
+  try {
+    const user = await User.findOne({ verificationCode: code });
+    if (!user) return res.status(400).json({ message: 'Invalid verification code' });
+
+    user.status = 'verified';
+    user.verificationCode = null;
+    await user.save();
+
+    await EmailLog.create({ type: 'verification-complete', recipient: user.email });
+
+    res.json({ message: 'Email verified successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ====================
+// 👤 Profile Management
+// ====================
+
+// Get Profile
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password -verificationCode');
@@ -111,7 +131,7 @@ router.get('/profile', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Update user profile
+// Update Profile
 router.put('/profile', authMiddleware, async (req, res) => {
   const { username, bank, fullName, contact } = req.body;
   try {
@@ -125,13 +145,29 @@ router.put('/profile', authMiddleware, async (req, res) => {
     user.profileSet = true;
 
     await user.save();
+
     res.json(user);
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// ✅ Get balance
+// Check Username Availability
+router.get('/check-username', async (req, res) => {
+  const { username } = req.query;
+  try {
+    const user = await User.findOne({ username });
+    res.json({ available: !user });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ====================
+// 💰 Balance & Transactions
+// ====================
+
+// Get Balance
 router.get('/balance', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('balance');
@@ -141,47 +177,7 @@ router.get('/balance', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Get payment methods
-router.get('/payment-methods', authMiddleware, async (req, res) => {
-  try {
-    const paymentMethods = await PaymentMethod.find({ user: req.user.id });
-    res.json(paymentMethods);
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ✅ Add payment method
-router.post('/payment-methods', authMiddleware, async (req, res) => {
-  const { type, details } = req.body;
-  try {
-    const paymentMethod = new PaymentMethod({
-      user: req.user.id,
-      type,
-      details,
-    });
-    await paymentMethod.save();
-    res.status(201).json(paymentMethod);
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ✅ Delete payment method
-router.delete('/payment-methods/:id', authMiddleware, async (req, res) => {
-  try {
-    const paymentMethod = await PaymentMethod.findById(req.params.id);
-    if (!paymentMethod || paymentMethod.user.toString() !== req.user.id) {
-      return res.status(404).json({ message: 'Payment method not found' });
-    }
-    await paymentMethod.deleteOne();
-    res.json({ message: 'Payment method removed' });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ✅ Transaction history
+// Transaction History
 router.get('/transactions', authMiddleware, async (req, res) => {
   try {
     const withdrawals = await Withdrawal.find({ user: req.user.id }).populate('method');
@@ -198,18 +194,7 @@ router.get('/transactions', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Check username availability
-router.get('/check-username', async (req, res) => {
-  const { username } = req.query;
-  try {
-    const user = await User.findOne({ username });
-    res.json({ available: !user });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ✅ Pending payment check
+// Pending Payment
 router.get('/pending-payment', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -223,7 +208,7 @@ router.get('/pending-payment', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Confirm deposit
+// Confirm Deposit
 router.post('/deposits', authMiddleware, async (req, res) => {
   const { amount, type, level } = req.body;
   try {
@@ -248,7 +233,7 @@ router.post('/deposits', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Security settings
+// Security Settings
 router.put('/security', authMiddleware, async (req, res) => {
   const { newPassword } = req.body;
   try {
@@ -267,46 +252,51 @@ router.put('/security', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Referrals
-router.get('/referrals', authMiddleware, async (req, res) => {
+// ====================
+// 💸 Payments
+// ====================
+
+// Payment Methods
+router.get('/payment-methods', authMiddleware, async (req, res) => {
   try {
-    const referrals = await User.find({ referredBy: req.user.id }).select('fullName email username status');
-    res.json(referrals);
+    const paymentMethods = await PaymentMethod.find({ user: req.user.id });
+    res.json(paymentMethods);
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// ✅ Request upgrade
-router.post('/upgrade', authMiddleware, async (req, res) => {
-  const { level, amount } = req.body;
+// Add Payment Method
+router.post('/payment-methods', authMiddleware, async (req, res) => {
+  const { type, details } = req.body;
   try {
-    if (!level || !amount) {
-      return res.status(400).json({ message: 'Level and amount are required' });
-    }
-
-    const user = await User.findById(req.user.id);
-    if (!user) return res.status(404).json({ message: 'User not found' });
-
-    if (level <= user.level) {
-      return res.status(400).json({ message: 'New level must be higher than current level' });
-    }
-
-    const upgrade = new Upgrade({ user: req.user.id, level, amount });
-    await upgrade.save();
-
-    user.upgrades.push(upgrade._id);
-    user.level = level;
-
-    await user.save();
-    await sendEmail(user.email, 'Upgrade Requested', `<p>Your request to upgrade to level ${level} with ₦${amount} has been received and is pending confirmation.</p>`);
-    res.json({ message: 'Upgrade request submitted', level: user.level });
+    const paymentMethod = new PaymentMethod({
+      user: req.user.id,
+      type,
+      details,
+    });
+    await paymentMethod.save();
+    res.status(201).json(paymentMethod);
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// ✅ Request withdrawal
+// Delete Payment Method
+router.delete('/payment-methods/:id', authMiddleware, async (req, res) => {
+  try {
+    const paymentMethod = await PaymentMethod.findById(req.params.id);
+    if (!paymentMethod || paymentMethod.user.toString() !== req.user.id) {
+      return res.status(404).json({ message: 'Payment method not found' });
+    }
+    await paymentMethod.deleteOne();
+    res.json({ message: 'Payment method removed' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Withdrawals
 router.post('/withdrawals', authMiddleware, async (req, res) => {
   const { amount } = req.body;
   try {
@@ -318,9 +308,7 @@ router.post('/withdrawals', authMiddleware, async (req, res) => {
     }
 
     const method = await PaymentMethod.findOne({ user: user._id });
-    if (!method) {
-      return res.status(400).json({ message: 'No payment method found' });
-    }
+    if (!method) return res.status(400).json({ message: 'No payment method found' });
 
     const withdrawal = new Withdrawal({
       user: user._id,
@@ -343,7 +331,48 @@ router.post('/withdrawals', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Task completion
+// ====================
+// 🚀 Referrals & Upgrades
+// ====================
+
+// Referrals
+router.get('/referrals', authMiddleware, async (req, res) => {
+  try {
+    const referrals = await User.find({ referredBy: req.user.id }).select('fullName email username status');
+    res.json(referrals);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Request Upgrade
+router.post('/upgrade', authMiddleware, async (req, res) => {
+  const { level, amount } = req.body;
+  try {
+    if (!level || !amount) return res.status(400).json({ message: 'Level and amount are required' });
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (level <= user.level) return res.status(400).json({ message: 'New level must be higher than current level' });
+
+    const upgrade = new Upgrade({ user: req.user.id, level, amount });
+    await upgrade.save();
+    user.upgrades.push(upgrade._id);
+    user.level = level;
+    await user.save();
+
+    await sendEmail(user.email, 'Upgrade Requested', `<p>Your request to upgrade to level ${level} with ₦${amount} has been received and is pending confirmation.</p>`);
+    res.json({ message: 'Upgrade request submitted', level: user.level });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ====================
+// 🧠 Task System
+// ====================
+
+// Complete Task
 router.post('/tasks', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
