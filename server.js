@@ -61,6 +61,9 @@ mongoose.connect(process.env.MONGODB_URI, {
 app.use('/api/users', require('./routes/user'));
 app.use('/api/admin', require('./routes/admin'));
 
+// 👇 Add this line to support /api/auth/signup using the same user routes
+app.use('/api/auth', require('./routes/user')); 
+
 // ✅ WebSocket Events
 io.on('connection', (socket) => {
   console.log('🔌 A user connected');
