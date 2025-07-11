@@ -64,13 +64,25 @@ app.use('/api/admin', require('./routes/admin')); // Only include once!
 io.on('connection', (socket) => {
   console.log('🔌 A user connected');
 
+  // Join room based on user ID (should be sent from client after login)
+  socket.on('join-room', (userId) => {
+    if (userId) {
+      socket.join(userId);
+      console.log(`✅ User with ID ${userId} joined their room`);
+    } else {
+      console.log('⚠️ join-room event received without userId');
+    }
+  });
+
+  // Handle disconnect
   socket.on('disconnect', () => {
     console.log('❌ A user disconnected');
   });
 
-  // Example custom event
-  // socket.on('example-event', (data) => { ... });
+  // More custom events can be defined here if need be.
+  // socket.on('custom-event', (data) => { ... });
 });
+
 
 // Start Server
 const PORT = process.env.PORT || 5000;

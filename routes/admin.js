@@ -169,6 +169,19 @@ router.post('/tasks', [authMiddleware, adminMiddleware], async (req, res) => {
     const task = new Task({ title, link, status, reward: 300 });
     await task.save();
 
+    // Emit event to users on level 1–6
+    const io = req.app.get('io');
+    const users = await User.find({ level: { $gte: 1, $lte: 6 } });
+
+    users.forEach(user => {
+      io.to(user._id.toString()).emit('new-task', {
+        _id: task._id.toString(),
+        title: task.title,
+        link: task.link,
+        status: task.status
+      });
+    });
+
     res.status(201).json({
       _id: task._id.toString(),
       title: task.title,
