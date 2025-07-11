@@ -12,7 +12,7 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
-// Allowed origins including the new frontend
+// Allowed CORS origins
 const allowedOrigins = [
   'https://dta-client.vercel.app',
   'https://dta-admin.vercel.app',
@@ -21,23 +21,26 @@ const allowedOrigins = [
   'http://localhost:3001'
 ];
 
-// Initialize Socket.IO with CORS settings
+// Initialize Socket.IO with CORS
 const io = socketIo(server, {
   cors: {
     origin: allowedOrigins,
     methods: ['GET', 'POST'],
-    credentials: true
-  }
+    credentials: true,
+  },
 });
+
+// Attach io to app for use in routes
+app.set('io', io);
 
 // Middleware
 app.use(cors({
   origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
+  credentials: true,
 }));
 
-app.options('*', cors()); // ✅ Handle preflight requests
+app.options('*', cors()); // Preflight
 
 app.use(express.json());
 
@@ -45,22 +48,17 @@ app.use(express.json());
 console.log('Connecting to MongoDB...');
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
-  useUnifiedTopology: true
-}).then(() => {
-  console.log('✅ MongoDB Connected');
-}).catch(err => {
-  console.error('❌ MongoDB connection error:', err);
-});
+  useUnifiedTopology: true,
+})
+.then(() => console.log('✅ MongoDB Connected'))
+.catch(err => console.error('❌ MongoDB connection error:', err));
 
 // Routes
 app.use('/api/users', require('./routes/user'));
 app.use('/api/tasks', require('./routes/task'));
 app.use('/api/withdrawals', require('./routes/withdrawal'));
 app.use('/api/referrals', require('./routes/referral'));
-app.use('/api/admin', require('./routes/admin'));
-
-// Make Socket.IO accessible in routes
-app.set('io', io);
+app.use('/api/admin', require('./routes/admin')); // Only include once!
 
 // WebSocket Events
 io.on('connection', (socket) => {
@@ -70,8 +68,8 @@ io.on('connection', (socket) => {
     console.log('❌ A user disconnected');
   });
 
-  // You can define custom events here as needed:
-  // socket.on('some-event', (data) => { ... });
+  // Example custom event
+  // socket.on('example-event', (data) => { ... });
 });
 
 // Start Server
