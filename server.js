@@ -18,7 +18,7 @@ const server = http.createServer(app);
 const allowedOrigins = [
   'https://dailytaskacademy.vercel.app',
   'https://dta-admin.vercel.app',
-  'https://dailytaskacademy.vercel.app',
+  'https://dailytaskacademy.netlify.app',
   'http://localhost:3000',
   'http://localhost:3001'
 ];
