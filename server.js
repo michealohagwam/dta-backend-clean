@@ -16,7 +16,7 @@ const server = http.createServer(app);
 
 // Allowed CORS origins
 const allowedOrigins = [
-  'https://dta-client.vercel.app',
+  'https://dailytaskacademy.vercel.app',
   'https://dta-admin.vercel.app',
   'https://dailytaskacademy.vercel.app',
   'http://localhost:3000',
