@@ -57,14 +57,11 @@ mongoose.connect(process.env.MONGODB_URI, {
 .then(() => console.log('✅ MongoDB Connected'))
 .catch(err => console.error('❌ MongoDB connection error:', err));
 
-// Routes
+// ✅ Routes
 app.use('/api/users', require('./routes/user'));
-app.use('/api/tasks', require('./routes/task'));
-app.use('/api/withdrawals', require('./routes/withdrawal'));
-app.use('/api/referrals', require('./routes/referral'));
 app.use('/api/admin', require('./routes/admin'));
 
-// WebSocket Events
+// ✅ WebSocket Events
 io.on('connection', (socket) => {
   console.log('🔌 A user connected');
 
