@@ -44,7 +44,7 @@ router.post('/login', loginUser);
 // ✅ Signup with Email Verification
 router.post('/signup', signupLimiter, async (req, res) => {
   try {
-    const { name, username, email, phone, password, referralCode, level, amount } = req.body;
+    const { fullName, username, email, phone, password, referralCode, level, amount } = req.body;
 
     if (!name || !username || !email || !phone || !password || !level) {
       return res.status(400).json({ message: 'Missing required fields' });
@@ -65,11 +65,13 @@ router.post('/signup', signupLimiter, async (req, res) => {
     const verificationCode = generateVerificationCode();
     const signupIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
+    console.log('Received signup body:', req.body);
+
     const newUser = new User({
       fullName: name,
       username,
       email,
-      contact: phone,
+      phone,
       password: hashedPassword,
       referredBy: referralCode || null,
       level,
