@@ -46,7 +46,7 @@ router.post('/signup', signupLimiter, async (req, res) => {
   try {
     const { fullName, username, email, phone, password, referralCode, level, amount } = req.body;
 
-    if (!name || !username || !email || !phone || !password || !level) {
+    if (!fullName || !username || !email || !phone || !password || !level) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
@@ -68,7 +68,7 @@ router.post('/signup', signupLimiter, async (req, res) => {
     console.log('Received signup body:', req.body);
 
     const newUser = new User({
-      fullName: name,
+      fullName: fullName,
       username,
       email,
       phone,
