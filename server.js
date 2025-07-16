@@ -35,6 +35,10 @@ const io = socketIo(server, {
 // Attach io to app for use in routes
 app.set('io', io);
 
+
+app.set('trust proxy', 1); // Or 'true'
+// Enable rate limiting for signup route
+
 // Middleware
 app.use(cors({
   origin: allowedOrigins,

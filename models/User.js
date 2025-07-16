@@ -6,7 +6,7 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   phone: { type: String, required: true },
   password: { type: String, required: true },
-  referralCode: { type: String, unique: true },
+  referralCode: { type: String }, // removed `unique: true` here
   level: { type: Number, default: 1 },
   status: { type: String, enum: ['pending', 'verified', 'active', 'suspended'], default: 'pending' },
   verificationCode: { type: String },
@@ -27,5 +27,11 @@ const userSchema = new mongoose.Schema({
   upgrades: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Upgrade' }],
   lastTaskDate: { type: String },
 }, { timestamps: true });
+
+// ✅ Add a partial unique index to avoid duplicate key errors when referralCode is null
+userSchema.index(
+  { referralCode: 1 },
+  { unique: true, partialFilterExpression: { referralCode: { $exists: true, $ne: null } } }
+);
 
 module.exports = mongoose.model('User', userSchema);
