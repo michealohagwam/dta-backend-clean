@@ -111,9 +111,9 @@ router.post('/signup', signupLimiter, async (req, res) => {
   } catch (err) {
     Sentry.captureException(err);
     console.error('Signup error:', err.message);
-    if (err.fullName === 'MongooseServerSelectionError') {
+    if (err.name === 'MongooseServerSelectionError') {
       return res.status(503).json({ message: 'Database unavailable. Please try again later.' });
-    } else if (err.fullName === 'ValidationError') {
+    } else if (err.name === 'ValidationError') {
       return res.status(400).json({ message: err.message });
     }
     res.status(500).json({ message: 'Server error. Please try again.' });
@@ -140,7 +140,7 @@ router.post('/verify-email', async (req, res) => {
   } catch (err) {
     Sentry.captureException(err);
     console.error('Verify email error:', err.message);
-    if (err.fullName === 'MongooseServerSelectionError') {
+    if (err.name === 'MongooseServerSelectionError') {
       return res.status(503).json({ message: 'Database unavailable. Please try again later.' });
     }
     res.status(500).json({ message: 'Server error. Please try again.' });
