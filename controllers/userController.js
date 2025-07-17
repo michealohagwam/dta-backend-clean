@@ -47,8 +47,19 @@ const registerUser = async (req, res) => {
   const { fullName, email, password, username, referredBy } = req.body;
 
   try {
-    const existingUser = await User.findOne({ email });
-    if (existingUser) return res.status(400).json({ message: 'Email already in use' });
+    const existingUser = await User.findOne({
+      $or: [{ email }, { username }],
+    });
+
+    if (existingUser) {
+      if (existingUser.email === email && existingUser.username === username) {
+        return res.status(400).json({ message: 'Both email and username already exist' });
+      } else if (existingUser.email === email) {
+        return res.status(400).json({ message: 'Email already exists, please choose another' });
+      } else if (existingUser.username === username) {
+        return res.status(400).json({ message: 'Username already exists, please choose another' });
+      }
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -219,4 +230,3 @@ module.exports = {
   updatePaymentMethod,
   deletePaymentMethod,
 };
-// Note: The above functions are designed to be used in a Node.js/Express application with MongoDB.
