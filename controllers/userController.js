@@ -3,6 +3,19 @@ const PaymentMethod = require('../models/PaymentMethod');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sendEmail = require('../utils/sendEmail');
+const Sentry = require('@sentry/node');
+
+// Retry Logic for Database Operations
+async function withRetry(fn, retries = 3, delay = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i === retries - 1) throw err;
+      await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i))); // Exponential backoff
+    }
+  }
+}
 
 // @desc    Login user
 // @route   POST /api/users/login
@@ -11,7 +24,7 @@ const loginUser = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const user = await User.findOne({ email });
+    const user = await withRetry(() => User.findOne({ email }));
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -35,7 +48,8 @@ const loginUser = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error(err);
+    console.error('Login error:', err);
+    Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -44,12 +58,14 @@ const loginUser = async (req, res) => {
 // @route   POST /api/users/register
 // @access  Public
 const registerUser = async (req, res) => {
-  const { fullName, email, password, username, referredBy } = req.body;
+  const { fullName, email, password, username, referralCode } = req.body;
 
   try {
-    const existingUser = await User.findOne({
-      $or: [{ email }, { username }],
-    });
+    const existingUser = await withRetry(() =>
+      User.findOne({
+        $or: [{ email }, { username }],
+      })
+    );
 
     if (existingUser) {
       if (existingUser.email === email && existingUser.username === username) {
@@ -63,15 +79,24 @@ const registerUser = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    let referredBy = null;
+    if (referralCode) {
+      const referrer = await withRetry(() => User.findOne({ referralCode }));
+      if (referrer) {
+        referredBy = referrer._id;
+      }
+    }
+
     const newUser = new User({
       fullName,
       email,
       username,
       password: hashedPassword,
       referredBy,
+      referralCode: generateReferralCode(),
     });
 
-    await newUser.save();
+    await withRetry(() => newUser.save());
 
     await sendEmail(
       email,
@@ -80,8 +105,11 @@ const registerUser = async (req, res) => {
     );
 
     if (referredBy) {
-      const referrer = await User.findById(referredBy);
+      const referrer = await withRetry(() => User.findById(referredBy));
       if (referrer) {
+        referrer.referralBonus += 1000; // Example: Add referral bonus
+        referrer.invites += 1;
+        await withRetry(() => referrer.save());
         await sendEmail(
           referrer.email,
           'You Referred a New User!',
@@ -93,35 +121,46 @@ const registerUser = async (req, res) => {
     res.status(201).json({ message: 'User registered successfully' });
   } catch (err) {
     console.error('Register error:', err);
+    Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
 };
+
+// Helper function to generate a unique referral code
+function generateReferralCode() {
+  return Math.random().toString(36).substring(2, 10).toUpperCase();
+}
 
 // @desc    Update user profile
 // @route   PUT /api/users/profile
 // @access  Private
 const updateUserProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await withRetry(() => User.findById(req.user.id));
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     user.fullName = req.body.fullName || user.fullName;
+    user.username = req.body.username || user.username;
+    user.bank = req.body.bank || user.bank;
     user.contact = req.body.contact || user.contact;
     user.profileSet = true;
 
-    await user.save();
+    await withRetry(() => user.save());
 
     res.json({
       id: user._id,
       fullName: user.fullName,
-      contact: user.contact,
-      email: user.email,
       username: user.username,
+      email: user.email,
+      phone: user.phone,
+      bank: user.bank,
+      contact: user.contact,
       status: user.status,
       profileSet: user.profileSet,
     });
   } catch (err) {
     console.error('Update profile error:', err);
+    Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -130,19 +169,28 @@ const updateUserProfile = async (req, res) => {
 // @route   POST /api/users/payment-methods
 // @access  Private
 const addPaymentMethod = async (req, res) => {
-  const { type, details } = req.body;
+  const { type, bank, accountNumber, email } = req.body;
 
   try {
+    const details = type === 'Bank Account' ? { bank, accountNumber } : { email };
     const paymentMethod = new PaymentMethod({
       user: req.user.id,
       type,
       details,
     });
 
-    await paymentMethod.save();
-    res.status(201).json({ message: 'Payment method added', method: paymentMethod });
+    await withRetry(() => paymentMethod.save());
+    res.status(201).json({
+      message: 'Payment method added',
+      method: {
+        id: paymentMethod._id,
+        type: paymentMethod.type,
+        ...paymentMethod.details,
+      },
+    });
   } catch (err) {
     console.error('Add payment method error:', err);
+    Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -152,10 +200,16 @@ const addPaymentMethod = async (req, res) => {
 // @access  Private
 const getPaymentMethods = async (req, res) => {
   try {
-    const methods = await PaymentMethod.find({ user: req.user.id });
-    res.json(methods);
+    const methods = await withRetry(() => PaymentMethod.find({ user: req.user.id }));
+    const formattedMethods = methods.map(method => ({
+      id: method._id,
+      type: method.type,
+      ...method.details,
+    }));
+    res.json(formattedMethods);
   } catch (err) {
     console.error('Get payment methods error:', err);
+    Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -164,21 +218,29 @@ const getPaymentMethods = async (req, res) => {
 // @route   PUT /api/users/payment-methods/:id
 // @access  Private
 const updatePaymentMethod = async (req, res) => {
-  const { type, details } = req.body;
+  const { type, bank, accountNumber, email } = req.body;
 
   try {
-    const method = await PaymentMethod.findById(req.params.id);
+    const method = await withRetry(() => PaymentMethod.findById(req.params.id));
     if (!method || method.user.toString() !== req.user.id) {
       return res.status(404).json({ message: 'Payment method not found' });
     }
 
     method.type = type || method.type;
-    method.details = details || method.details;
+    method.details = type === 'Bank Account' ? { bank, accountNumber } : { email } || method.details;
 
-    await method.save();
-    res.json({ message: 'Payment method updated', method });
+    await withRetry(() => method.save());
+    res.json({
+      message: 'Payment method updated',
+      method: {
+        id: method._id,
+        type: method.type,
+        ...method.details,
+      },
+    });
   } catch (err) {
     console.error('Update payment method error:', err);
+    Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -188,35 +250,69 @@ const updatePaymentMethod = async (req, res) => {
 // @access  Private
 const deletePaymentMethod = async (req, res) => {
   try {
-    const method = await PaymentMethod.findById(req.params.id);
+    const method = await withRetry(() => PaymentMethod.findById(req.params.id));
     if (!method || method.user.toString() !== req.user.id) {
       return res.status(404).json({ message: 'Payment method not found' });
     }
 
-    await method.deleteOne();
+    await withRetry(() => method.deleteOne());
     res.json({ message: 'Payment method deleted successfully' });
   } catch (err) {
     console.error('Delete payment method error:', err);
+    Sentry.captureException(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Get referral statistics
+// @route   GET /api/users/referrals/stats
+// @access  Private
+const getReferralStats = async (req, res) => {
+  try {
+    const user = await withRetry(() => User.findById(req.user.id).populate('referrals'));
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Calculate referral stats
+    const referralCount = user.referrals.length;
+    const referralEarnings = user.referralBonus || 0;
+
+    res.json({
+      count: referralCount,
+      earnings: referralEarnings,
+    });
+  } catch (err) {
+    console.error('Referral stats fetch error:', err);
+    Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
 };
 
 // @desc    Notify upgrade
 const notifyUpgrade = async (user, level, amount) => {
-  await sendEmail(
-    user.email,
-    'Level Upgrade Successful',
-    `<p>Hi ${user.fullName},</p><p>Your account has been successfully upgraded to level ${level}.</p><p>Upgrade amount: ${amount}</p>`
-  );
+  try {
+    await sendEmail(
+      user.email,
+      'Level Upgrade Successful',
+      `<p>Hi ${user.fullName},</p><p>Your account has been successfully upgraded to level ${level}.</p><p>Upgrade amount: ${amount}</p>`
+    );
+  } catch (err) {
+    console.error('Notify upgrade error:', err);
+    Sentry.captureException(err);
+  }
 };
 
 // @desc    Notify withdrawal
 const notifyWithdrawal = async (user, amount) => {
-  await sendEmail(
-    user.email,
-    'Withdrawal Request Received',
-    `<p>Hello ${user.fullName},</p><p>Your withdrawal request of ${amount} has been received and is pending processing.</p>`
-  );
+  try {
+    await sendEmail(
+      user.email,
+      'Withdrawal Request Received',
+      `<p>Hello ${user.fullName},</p><p>Your withdrawal request of ${amount} has been received and is pending processing.</p>`
+    );
+  } catch (err) {
+    console.error('Notify withdrawal error:', err);
+    Sentry.captureException(err);
+  }
 };
 
 module.exports = {
@@ -229,4 +325,5 @@ module.exports = {
   getPaymentMethods,
   updatePaymentMethod,
   deletePaymentMethod,
+  getReferralStats,
 };
