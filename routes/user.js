@@ -362,6 +362,27 @@ router.get('/referrals', authMiddleware, async (req, res) => {
   }
 });
 
+// ✅ Referral Statistics
+router.get('/referrals/stats', authMiddleware, async (req, res) => {
+  try {
+    const user = await withRetry(() => User.findById(req.user.id).populate('referrals'));
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Calculate referral stats
+    const referralCount = user.referrals.length;
+    const referralEarnings = user.referralBonus || 0;
+
+    res.json({
+      count: referralCount,
+      earnings: referralEarnings
+    });
+  } catch (err) {
+    Sentry.captureException(err);
+    console.error('Referral stats fetch error:', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ✅ Request Upgrade
 router.post('/upgrade', authMiddleware, async (req, res) => {
   try {
