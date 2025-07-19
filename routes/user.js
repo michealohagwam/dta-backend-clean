@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { authMiddleware } = require('../middleware/auth');
@@ -11,12 +11,19 @@ const PaymentMethod = require('../models/PaymentMethod');
 const Withdrawal = require('../models/Withdrawal');
 const Upgrade = require('../models/Upgrade');
 const EmailLog = require('../models/EmailLog');
-const { io } = require('../server'); // Assuming server.js exports io for Socket.IO
+const { io } = require('../server');
+const {
+  loginUser,
+  registerUser,
+  updateUserProfile,
+  addPaymentMethod,
+  getPaymentMethods,
+  updatePaymentMethod,
+  deletePaymentMethod,
+  getReferralStats,
+} = require('../controllers/userController');
 
-// ✅ Controllers
-const { loginUser } = require('../controllers/userController');
-
-// ✅ Retry Logic for Database Operations
+// Retry Logic for Database Operations
 async function withRetry(fn, retries = 3, delay = 1000) {
   for (let i = 0; i < retries; i++) {
     try {
@@ -28,20 +35,20 @@ async function withRetry(fn, retries = 3, delay = 1000) {
   }
 }
 
-// ✅ Generate Verification Code
+// Generate Verification Code
 const generateVerificationCode = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-// ✅ Rate Limiter for Signup
+// Rate Limiter for Signup
 const signupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10,
-  message: 'Too many signup attempts from this IP, please try again later.'
+  message: 'Too many signup attempts from this IP, please try again later.',
 });
 
-// ✅ Login
+// Login
 router.post('/login', loginUser);
 
-// ✅ Signup with Email Verification
+// Signup with Email Verification
 router.post('/signup', signupLimiter, async (req, res) => {
   try {
     const { fullName, username, email, phone, password, referralCode, level, amount } = req.body;
@@ -65,33 +72,54 @@ router.post('/signup', signupLimiter, async (req, res) => {
     const verificationCode = generateVerificationCode();
     const signupIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
-    console.log('Received signup body:', req.body);
+    let referredBy = null;
+    if (referralCode) {
+      const referrer = await withRetry(() => User.findOne({ referralCode }));
+      if (referrer) {
+        referredBy = referrer._id;
+      }
+    }
 
     const newUser = new User({
-      fullName: fullName,
+      fullName,
       username,
       email,
       phone,
       password: hashedPassword,
-      referredBy: referralCode || null,
+      referredBy,
+      referralCode: generateVerificationCode(), // Use unique code
       level,
       status: 'pending',
       balance: { available: 0, pending: 0 },
       profileSet: false,
       tasksCompleted: 0,
       signupIP,
-      verificationCode
+      verificationCode,
     });
 
     await withRetry(() => newUser.save());
 
-    await sendEmail(email, 'Email Verification - Daily Task Academy', `
-      <p>Hello ${fullName},</p>
-      <p>Your verification code is: <b>${verificationCode}</b></p>
-      <p>Please verify your email and complete your payment of ₦${amount} to activate your account.</p>
-    `);
+    await sendEmail(
+      email,
+      'Email Verification - Daily Task Academy',
+      `<p>Hello ${fullName},</p><p>Your verification code is: <b>${verificationCode}</b></p><p>Please verify your email and complete your payment of ₦${amount} to activate your account.</p>`
+    );
 
     await withRetry(() => EmailLog.create({ type: 'verification', recipient: email }));
+
+    if (referredBy) {
+      const referrer = await withRetry(() => User.findById(referredBy));
+      if (referrer) {
+        referrer.referralBonus += 1000;
+        referrer.invites += 1;
+        await withRetry(() => referrer.save());
+        await sendEmail(
+          referrer.email,
+          'You Referred a New User!',
+          `<p>Great news! Someone just registered using your referral.</p><p>Keep referring to earn more!</p>`
+        );
+      }
+    }
 
     const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
@@ -105,8 +133,8 @@ router.post('/signup', signupLimiter, async (req, res) => {
         email: newUser.email,
         contact: newUser.contact,
         level: newUser.level,
-        status: newUser.status
-      }
+        status: newUser.status,
+      },
     });
   } catch (err) {
     Sentry.captureException(err);
@@ -120,7 +148,7 @@ router.post('/signup', signupLimiter, async (req, res) => {
   }
 });
 
-// ✅ Verify Email
+// Verify Email
 router.post('/verify-email', async (req, res) => {
   try {
     const { code } = req.body;
@@ -147,43 +175,13 @@ router.post('/verify-email', async (req, res) => {
   }
 });
 
-// ✅ Get User Profile
-router.get('/profile', authMiddleware, async (req, res) => {
-  try {
-    const user = await withRetry(() => User.findById(req.user.id).select('-password -verificationCode'));
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json(user);
-  } catch (err) {
-    Sentry.captureException(err);
-    console.error('Profile fetch error:', err.message);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+// Get User Profile
+router.get('/profile', authMiddleware, updateUserProfile);
 
-// ✅ Update User Profile
-router.put('/profile', authMiddleware, async (req, res) => {
-  try {
-    const { username, bank, fullName, contact } = req.body;
-    const user = await withRetry(() => User.findById(req.user.id));
-    if (!user) return res.status(404).json({ message: 'User not found' });
+// Update User Profile
+router.put('/profile', authMiddleware, updateUserProfile);
 
-    user.username = username || user.username;
-    user.bank = bank || user.bank;
-    user.fullName = fullName || user.fullName;
-    user.contact = contact || user.contact;
-    user.profileSet = true;
-
-    await withRetry(() => user.save());
-    io.to(user._id.toString()).emit('profile-update', { username, fullName, contact });
-    res.json(user);
-  } catch (err) {
-    Sentry.captureException(err);
-    console.error('Profile update error:', err.message);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ✅ Get Balance
+// Get Balance
 router.get('/balance', authMiddleware, async (req, res) => {
   try {
     const user = await withRetry(() => User.findById(req.user.id).select('balance'));
@@ -195,55 +193,16 @@ router.get('/balance', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Get Payment Methods
-router.get('/payment-methods', authMiddleware, async (req, res) => {
-  try {
-    const paymentMethods = await withRetry(() => PaymentMethod.find({ user: req.user.id }));
-    res.json(paymentMethods);
-  } catch (err) {
-    Sentry.captureException(err);
-    console.error('Payment methods fetch error:', err.message);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+// Get Payment Methods
+router.get('/payment-methods', authMiddleware, getPaymentMethods);
 
-// ✅ Add Payment Method
-router.post('/payment-methods', authMiddleware, async (req, res) => {
-  try {
-    const { type, details } = req.body;
-    if (!type || !details) return res.status(400).json({ message: 'Type and details are required' });
+// Add Payment Method
+router.post('/payment-methods', authMiddleware, addPaymentMethod);
 
-    const paymentMethod = new PaymentMethod({
-      user: req.user.id,
-      type,
-      details
-    });
-    await withRetry(() => paymentMethod.save());
-    res.status(201).json(paymentMethod);
-  } catch (err) {
-    Sentry.captureException(err);
-    console.error('Add payment method error:', err.message);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+// Delete Payment Method
+router.delete('/payment-methods/:id', authMiddleware, deletePaymentMethod);
 
-// ✅ Delete Payment Method
-router.delete('/payment-methods/:id', authMiddleware, async (req, res) => {
-  try {
-    const paymentMethod = await withRetry(() => PaymentMethod.findById(req.params.id));
-    if (!paymentMethod || paymentMethod.user.toString() !== req.user.id) {
-      return res.status(404).json({ message: 'Payment method not found' });
-    }
-    await withRetry(() => paymentMethod.deleteOne());
-    res.json({ message: 'Payment method removed' });
-  } catch (err) {
-    Sentry.captureException(err);
-    console.error('Delete payment method error:', err.message);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ✅ Transaction History
+// Transaction History
 router.get('/transactions', authMiddleware, async (req, res) => {
   try {
     const withdrawals = await withRetry(() => Withdrawal.find({ user: req.user.id }).populate('method'));
@@ -252,7 +211,7 @@ router.get('/transactions', authMiddleware, async (req, res) => {
       type: 'Withdrawal',
       amount: w.amount,
       description: `Withdrawal to ${w?.method?.type || 'Unknown method'}`,
-      status: w.status
+      status: w.status,
     }));
     res.json(transactions);
   } catch (err) {
@@ -262,7 +221,7 @@ router.get('/transactions', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Check Username Availability
+// Check Username Availability
 router.get('/check-username', async (req, res) => {
   try {
     const { username } = req.query;
@@ -276,7 +235,7 @@ router.get('/check-username', async (req, res) => {
   }
 });
 
-// ✅ Pending Payment Check
+// Pending Payment Check
 router.get('/pending-payment', authMiddleware, async (req, res) => {
   try {
     const user = await withRetry(() => User.findById(req.user.id));
@@ -292,7 +251,7 @@ router.get('/pending-payment', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Confirm Deposit
+// Confirm Deposit
 router.post('/deposits', authMiddleware, async (req, res) => {
   try {
     const { amount, type, level } = req.body;
@@ -305,7 +264,11 @@ router.post('/deposits', authMiddleware, async (req, res) => {
       user.status = 'active';
       user.balance.available += amount;
       await withRetry(() => user.save());
-      await sendEmail(user.email, 'Registration Payment Confirmed', `<p>Hi ${user.fullName}, your registration payment of ₦${amount} has been confirmed. Welcome aboard!</p>`);
+      await sendEmail(
+        user.email,
+        'Registration Payment Confirmed',
+        `<p>Hi ${user.fullName}, your registration payment of ₦${amount} has been confirmed. Welcome aboard!</p>`
+      );
       await withRetry(() => EmailLog.create({ type: 'registration-payment', recipient: user.email }));
       io.to(user._id.toString()).emit('status-update', { status: 'active' });
     } else if (type === 'upgrade') {
@@ -313,7 +276,11 @@ router.post('/deposits', authMiddleware, async (req, res) => {
       await withRetry(() => upgrade.save());
       user.upgrades.push(upgrade._id);
       await withRetry(() => user.save());
-      await sendEmail(user.email, 'Upgrade Payment Confirmed', `<p>Hi ${user.fullName}, your upgrade payment of ₦${amount} to level ${level} has been confirmed.</p>`);
+      await sendEmail(
+        user.email,
+        'Upgrade Payment Confirmed',
+        `<p>Hi ${user.fullName}, your upgrade payment of ₦${amount} to level ${level} has been confirmed.</p>`
+      );
       await withRetry(() => EmailLog.create({ type: 'upgrade-payment', recipient: user.email }));
       io.to(user._id.toString()).emit('upgrade-update', { level });
     }
@@ -326,7 +293,7 @@ router.post('/deposits', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Security Settings
+// Security Settings
 router.put('/security', authMiddleware, async (req, res) => {
   try {
     const { newPassword } = req.body;
@@ -339,7 +306,11 @@ router.put('/security', authMiddleware, async (req, res) => {
     user.password = hashedPassword;
     await withRetry(() => user.save());
 
-    await sendEmail(user.email, 'Password Updated', `<p>Hi ${user.fullName}, your password has been successfully updated.</p>`);
+    await sendEmail(
+      user.email,
+      'Password Updated',
+      `<p>Hi ${user.fullName}, your password has been successfully updated.</p>`
+    );
     await withRetry(() => EmailLog.create({ type: 'password-update', recipient: user.email }));
 
     res.json({ message: 'Security settings updated' });
@@ -350,10 +321,12 @@ router.put('/security', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Referrals
+// Referrals
 router.get('/referrals', authMiddleware, async (req, res) => {
   try {
-    const referrals = await withRetry(() => User.find({ referredBy: req.user.id }).select('fullName email username status'));
+    const referrals = await withRetry(() =>
+      User.find({ referredBy: req.user.id }).select('fullName email username status')
+    );
     res.json(referrals);
   } catch (err) {
     Sentry.captureException(err);
@@ -362,28 +335,10 @@ router.get('/referrals', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Referral Statistics
-router.get('/referrals/stats', authMiddleware, async (req, res) => {
-  try {
-    const user = await withRetry(() => User.findById(req.user.id).populate('referrals'));
-    if (!user) return res.status(404).json({ message: 'User not found' });
+// Referral Statistics
+router.get('/referrals/stats', authMiddleware, getReferralStats);
 
-    // Calculate referral stats
-    const referralCount = user.referrals.length;
-    const referralEarnings = user.referralBonus || 0;
-
-    res.json({
-      count: referralCount,
-      earnings: referralEarnings
-    });
-  } catch (err) {
-    Sentry.captureException(err);
-    console.error('Referral stats fetch error:', err.message);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ✅ Request Upgrade
+// Request Upgrade
 router.post('/upgrade', authMiddleware, async (req, res) => {
   try {
     const { level, amount } = req.body;
@@ -401,7 +356,11 @@ router.post('/upgrade', authMiddleware, async (req, res) => {
     user.level = level;
     await withRetry(() => user.save());
 
-    await sendEmail(user.email, 'Upgrade Requested', `<p>Your request to upgrade to level ${level} with ₦${amount} has been received and is pending confirmation.</p>`);
+    await sendEmail(
+      user.email,
+      'Upgrade Requested',
+      `<p>Your request to upgrade to level ${level} with ₦${amount} has been received and is pending confirmation.</p>`
+    );
     await withRetry(() => EmailLog.create({ type: 'upgrade-request', recipient: user.email }));
 
     io.to(user._id.toString()).emit('upgrade-update', { level });
@@ -413,7 +372,7 @@ router.post('/upgrade', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Request Withdrawal
+// Request Withdrawal
 router.post('/withdrawals', authMiddleware, async (req, res) => {
   try {
     const { amount } = req.body;
@@ -434,7 +393,7 @@ router.post('/withdrawals', authMiddleware, async (req, res) => {
       amount,
       method: method._id,
       status: 'pending',
-      date: new Date()
+      date: new Date(),
     });
     await withRetry(() => withdrawal.save());
 
@@ -442,7 +401,11 @@ router.post('/withdrawals', authMiddleware, async (req, res) => {
     user.balance.pending += amount;
     await withRetry(() => user.save());
 
-    await sendEmail(user.email, 'Withdrawal Request Submitted', `<p>You have requested a withdrawal of ₦${amount}. It is now pending approval.</p>`);
+    await sendEmail(
+      user.email,
+      'Withdrawal Request Submitted',
+      `<p>You have requested a withdrawal of ₦${amount}. It is now pending approval.</p>`
+    );
     await withRetry(() => EmailLog.create({ type: 'withdrawal-request', recipient: user.email }));
 
     io.to(user._id.toString()).emit('balance-update', { balance: user.balance });
@@ -454,27 +417,67 @@ router.post('/withdrawals', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Task Completion
+// Task Completion
 router.post('/tasks', authMiddleware, async (req, res) => {
   try {
+    const { reward } = req.body;
+    if (!reward || isNaN(reward) || reward <= 0) {
+      return res.status(400).json({ message: 'Valid reward amount is required' });
+    }
+
     const user = await withRetry(() => User.findById(req.user.id));
     if (!user) return res.status(404).json({ message: 'User not found' });
 
+    // Optional: Prevent multiple tasks per day
+    const today = new Date().toISOString().split('T')[0];
+    if (user.lastTaskDate === today) {
+      return res.status(400).json({ message: 'Task already completed today' });
+    }
+
     user.tasksCompleted += 1;
-    user.balance.available += 500;
+    user.balance.available += parseFloat(reward);
+    user.lastTaskDate = today;
     await withRetry(() => user.save());
 
     io.to(user._id.toString()).emit('balance-update', { balance: user.balance });
     io.to(user._id.toString()).emit('task-update', { tasksCompleted: user.tasksCompleted });
 
     res.status(200).json({
-      message: 'Task completed successfully',
+      id: user._id,
+      fullName: user.fullName,
+      username: user.username,
+      email: user.email,
+      phone: user.phone,
+      bank: user.bank,
+      contact: user.contact,
+      status: user.status,
+      profileSet: user.profileSet,
       tasksCompleted: user.tasksCompleted,
-      newBalance: user.balance.available
+      balance: user.balance,
+      level: user.level,
+      referralBonus: user.referralBonus,
+      invites: user.invites,
     });
   } catch (err) {
     Sentry.captureException(err);
     console.error('Task completion error:', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Referral Link Redirect
+router.get('/ref/:referralCode', async (req, res) => {
+  try {
+    const { referralCode } = req.params;
+    const user = await withRetry(() => User.findOne({ referralCode }));
+    if (!user) {
+      return res.status(404).json({ message: 'Referral code not found' });
+    }
+    // Redirect to signup page with referral code as query parameter
+    res.redirect(`/signup.html?ref=${referralCode}`);
+  } catch (err) {
+    console.error('Referral link error:', err);
+    Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
 });

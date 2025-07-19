@@ -107,7 +107,7 @@ const registerUser = async (req, res) => {
     if (referredBy) {
       const referrer = await withRetry(() => User.findById(referredBy));
       if (referrer) {
-        referrer.referralBonus += 1000; // Example: Add referral bonus
+        referrer.referralBonus += 1000;
         referrer.invites += 1;
         await withRetry(() => referrer.save());
         await sendEmail(
@@ -269,11 +269,10 @@ const deletePaymentMethod = async (req, res) => {
 // @access  Private
 const getReferralStats = async (req, res) => {
   try {
-    const user = await withRetry(() => User.findById(req.user.id).populate('referrals'));
+    const user = await withRetry(() => User.findById(req.user.id));
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // Calculate referral stats
-    const referralCount = user.referrals.length;
+    const referralCount = await withRetry(() => User.countDocuments({ referredBy: req.user.id }));
     const referralEarnings = user.referralBonus || 0;
 
     res.json({
