@@ -1,3 +1,4 @@
+// controllers/userController.js
 const User = require('../models/User');
 const PaymentMethod = require('../models/PaymentMethod');
 const bcrypt = require('bcryptjs');
@@ -45,6 +46,7 @@ const loginUser = async (req, res) => {
         username: user.username,
         isAdmin: user.isAdmin,
         status: user.status,
+        referralCode: user.referralCode, // Include referralCode
       },
     });
   } catch (err) {
@@ -63,17 +65,15 @@ const registerUser = async (req, res) => {
   try {
     const existingUser = await withRetry(() =>
       User.findOne({
-        $or: [{ email }, { username }],
+        $or: [{ email }, { username }, { referralCode: username }],
       })
     );
 
     if (existingUser) {
-      if (existingUser.email === email && existingUser.username === username) {
-        return res.status(400).json({ message: 'Both email and username already exist' });
-      } else if (existingUser.email === email) {
+      if (existingUser.email === email) {
         return res.status(400).json({ message: 'Email already exists, please choose another' });
-      } else if (existingUser.username === username) {
-        return res.status(400).json({ message: 'Username already exists, please choose another' });
+      } else if (existingUser.username === username || existingUser.referralCode === username) {
+        return res.status(400).json({ message: 'Username already exists or is used as a referral code' });
       }
     }
 
@@ -93,7 +93,7 @@ const registerUser = async (req, res) => {
       username,
       password: hashedPassword,
       referredBy,
-      referralCode: generateReferralCode(),
+      referralCode: username, // Use username as referralCode
     });
 
     await withRetry(() => newUser.save());
@@ -118,18 +118,22 @@ const registerUser = async (req, res) => {
       }
     }
 
-    res.status(201).json({ message: 'User registered successfully' });
+    res.status(201).json({
+      message: 'User registered successfully',
+      user: {
+        id: newUser._id,
+        fullName: newUser.fullName,
+        username: newUser.username,
+        email: newUser.email,
+        referralCode: newUser.referralCode, // Include referralCode
+      },
+    });
   } catch (err) {
     console.error('Register error:', err);
     Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
 };
-
-// Helper function to generate a unique referral code
-function generateReferralCode() {
-  return Math.random().toString(36).substring(2, 10).toUpperCase();
-}
 
 // @desc    Update user profile
 // @route   PUT /api/users/profile
@@ -145,6 +149,15 @@ const updateUserProfile = async (req, res) => {
     user.contact = req.body.contact || user.contact;
     user.profileSet = true;
 
+    // If username is updated, ensure referralCode is updated and unique
+    if (req.body.username && req.body.username !== user.username) {
+      const existingUser = await withRetry(() => User.findOne({ $or: [{ username: req.body.username }, { referralCode: req.body.username }] }));
+      if (existingUser) {
+        return res.status(400).json({ message: 'Username or referral code already exists' });
+      }
+      user.referralCode = req.body.username;
+    }
+
     await withRetry(() => user.save());
 
     res.json({
@@ -157,6 +170,7 @@ const updateUserProfile = async (req, res) => {
       contact: user.contact,
       status: user.status,
       profileSet: user.profileSet,
+      referralCode: user.referralCode, // Include referralCode
     });
   } catch (err) {
     console.error('Update profile error:', err);
