@@ -45,7 +45,7 @@ const loginUser = async (req, res) => {
         username: user.username,
         isAdmin: user.isAdmin,
         status: user.status,
-        referralCode: user.referralCode || user.username, // Fallback to username
+        referralCode: user.referralCode || user.username,
       },
     });
   } catch (err) {
@@ -74,7 +74,6 @@ const registerUser = async (req, res) => {
 
     if (existingUser) {
       if (existingUser.email === email) {
-        return Ascending
         return res.status(400).json({ message: 'Email already exists, please choose another' });
       } else if (existingUser.username === username || existingUser.referralCode === username) {
         return res.status(400).json({ message: 'Username already exists or is used as a referral code' });
@@ -98,7 +97,7 @@ const registerUser = async (req, res) => {
       username,
       password: hashedPassword,
       referredBy,
-      referralCode: username, // Use username as referralCode
+      referralCode: username,
     });
 
     await withRetry(() => newUser.save());
@@ -130,7 +129,7 @@ const registerUser = async (req, res) => {
         fullName: newUser.fullName,
         username: newUser.username,
         email: newUser.email,
-        referralCode: newUser.referralCode, // Include referralCode
+        referralCode: newUser.referralCode,
       },
     });
   } catch (err) {
@@ -141,32 +140,34 @@ const registerUser = async (req, res) => {
 };
 
 // @desc    Update user profile
-// @route   PUT /api/users/profile
+// @route   GET|PUT /api/users/profile
 // @access  Private
 const updateUserProfile = async (req, res) => {
   try {
     const user = await withRetry(() => User.findById(req.user.id));
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    user.fullName = req.body.fullName || user.fullName;
-    user.username = req.body.username || user.username;
-    user.bank = req.body.bank || user.bank;
-    user.contact = req.body.contact || user.contact;
-    user.profileSet = true;
+    if (req.method === 'PUT') {
+      user.fullName = req.body.fullName || user.fullName;
+      user.username = req.body.username || user.username;
+      user.bank = req.body.bank || user.bank;
+      user.contact = req.body.contact || user.contact;
+      user.profileSet = true;
 
-    // If username is updated, ensure referralCode is updated and unique
-    if (req.body.username && req.body.username !== user.username) {
-      const existingUser = await withRetry(() => User.findOne({ $or: [{ username: req.body.username }, { referralCode: req.body.username }] }));
-      if (existingUser) {
-        return res.status(400).json({ message: 'Username or referral code already exists' });
+      // If username is updated, ensure referralCode is updated and unique
+      if (req.body.username && req.body.username !== user.username) {
+        const existingUser = await withRetry(() => User.findOne({ $or: [{ username: req.body.username }, { referralCode: req.body.username }] }));
+        if (existingUser) {
+          return res.status(400).json({ message: 'Username or referral code already exists' });
+        }
+        user.username = req.body.username;
+        user.referralCode = req.body.username;
       }
-      user.username = req.body.username;
-      user.referralCode = req.body.username; // Update referralCode if username changes
+
+      await withRetry(() => user.save());
     }
 
-    await withRetry(() => user.save());
-
-    res.json({
+    const response = {
       id: user._id,
       fullName: user.fullName,
       username: user.username,
@@ -176,8 +177,10 @@ const updateUserProfile = async (req, res) => {
       contact: user.contact,
       status: user.status,
       profileSet: user.profileSet,
-      referralCode: user.referralCode || user.username, // Fallback to username
-    });
+      referralCode: user.referralCode || user.username,
+    };
+    console.log('Profile response:', response); // Debug log
+    res.json(response);
   } catch (err) {
     console.error('Update profile error:', err);
     Sentry.captureException(err);

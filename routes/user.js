@@ -142,7 +142,7 @@ router.post('/signup', signupLimiter, async (req, res) => {
         contact: newUser.contact,
         level: newUser.level,
         status: newUser.status,
-        referralCode: newUser.referralCode, // Include referralCode
+        referralCode: newUser.referralCode,
       },
     });
   } catch (err) {
@@ -469,7 +469,7 @@ router.post('/tasks', authMiddleware, async (req, res) => {
       level: user.level,
       referralBonus: user.referralBonus,
       invites: user.invites,
-      referralCode: user.referralCode || user.username, // Fallback to username
+      referralCode: user.referralCode || user.username,
     });
   } catch (err) {
     Sentry.captureException(err);
@@ -482,19 +482,23 @@ router.post('/tasks', authMiddleware, async (req, res) => {
 router.get('/ref/:referralCode', async (req, res) => {
   try {
     const { referralCode } = req.params;
+    console.log(`Processing referral link for code: ${referralCode}`); // Debug log
     if (!referralCode || referralCode === 'undefined' || !/^[a-zA-Z0-9_]{3,20}$/.test(referralCode)) {
-      return res.redirect('/signup.html'); // Redirect without ref for invalid codes
+      console.log(`Invalid referral code: ${referralCode}`);
+      return res.redirect('/signup.html');
     }
     const user = await withRetry(() => User.findOne({ $or: [{ referralCode }, { username: referralCode }] }));
     if (!user) {
-      return res.redirect('/signup.html'); // Redirect without ref if not found
+      console.log(`User not found for referral code or username: ${referralCode}`);
+      return res.redirect('/signup.html');
     }
     const code = user.referralCode && user.referralCode !== 'undefined' && user.referralCode !== null ? user.referralCode : user.username;
+    console.log(`Redirecting to signup.html with ref: ${code}`);
     res.redirect(`/signup.html?ref=${encodeURIComponent(code)}`);
   } catch (err) {
-    console.error('Referral link error:', err);
+    console.error('Referral link error:', err.message);
     Sentry.captureException(err);
-    res.redirect('/signup.html'); // Fallback redirect
+    res.redirect('/signup.html');
   }
 });
 
