@@ -1,4 +1,3 @@
-// routes/user.js
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
@@ -58,6 +57,10 @@ router.post('/signup', signupLimiter, async (req, res) => {
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
+    if (username === 'undefined' || typeof username !== 'string') {
+      return res.status(400).json({ message: 'Invalid username' });
+    }
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const phoneRegex = /^[0-9]{10,15}$/;
     const usernameRegex = /^[a-zA-Z0-9_]{3,20}$/;
@@ -77,11 +80,12 @@ router.post('/signup', signupLimiter, async (req, res) => {
     const signupIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
     let referredBy = null;
-    if (referralCode) {
-      const referrer = await withRetry(() => User.findOne({ referralCode }));
-      if (referrer) {
-        referredBy = referrer._id;
+    if (referralCode && referralCode !== 'undefined') {
+      const referrer = await withRetry(() => User.findOne({ $or: [{ referralCode }, { username: referralCode }] }));
+      if (!referrer) {
+        return res.status(400).json({ message: 'Invalid referral code' });
       }
+      referredBy = referrer._id;
     }
 
     const newUser = new User({
@@ -231,6 +235,9 @@ router.get('/check-username', async (req, res) => {
   try {
     const { username } = req.query;
     if (!username) return res.status(400).json({ message: 'Username is required' });
+    if (username === 'undefined' || typeof username !== 'string') {
+      return res.status(400).json({ message: 'Invalid username' });
+    }
     const user = await withRetry(() => User.findOne({ $or: [{ username }, { referralCode: username }] }));
     res.json({ available: !user });
   } catch (err) {
@@ -462,7 +469,7 @@ router.post('/tasks', authMiddleware, async (req, res) => {
       level: user.level,
       referralBonus: user.referralBonus,
       invites: user.invites,
-      referralCode: user.referralCode, // Include referralCode
+      referralCode: user.referralCode || user.username, // Fallback to username
     });
   } catch (err) {
     Sentry.captureException(err);
@@ -475,18 +482,19 @@ router.post('/tasks', authMiddleware, async (req, res) => {
 router.get('/ref/:referralCode', async (req, res) => {
   try {
     const { referralCode } = req.params;
-    if (!/^[a-zA-Z0-9_]{3,20}$/.test(referralCode)) {
-      return res.status(400).json({ message: 'Invalid referral code format' });
+    if (!referralCode || referralCode === 'undefined' || !/^[a-zA-Z0-9_]{3,20}$/.test(referralCode)) {
+      return res.redirect('/signup.html'); // Redirect without ref for invalid codes
     }
-    const user = await withRetry(() => User.findOne({ referralCode }));
+    const user = await withRetry(() => User.findOne({ $or: [{ referralCode }, { username: referralCode }] }));
     if (!user) {
-      return res.status(404).json({ message: 'Referral code not found' });
+      return res.redirect('/signup.html'); // Redirect without ref if not found
     }
-    res.redirect(`/signup.html?ref=${referralCode}`);
+    const code = user.referralCode && user.referralCode !== 'undefined' && user.referralCode !== null ? user.referralCode : user.username;
+    res.redirect(`/signup.html?ref=${encodeURIComponent(code)}`);
   } catch (err) {
     console.error('Referral link error:', err);
     Sentry.captureException(err);
-    res.status(500).json({ message: 'Server error' });
+    res.redirect('/signup.html'); // Fallback redirect
   }
 });
 

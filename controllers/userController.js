@@ -1,4 +1,3 @@
-// controllers/userController.js
 const User = require('../models/User');
 const PaymentMethod = require('../models/PaymentMethod');
 const bcrypt = require('bcryptjs');
@@ -46,7 +45,7 @@ const loginUser = async (req, res) => {
         username: user.username,
         isAdmin: user.isAdmin,
         status: user.status,
-        referralCode: user.referralCode, // Include referralCode
+        referralCode: user.referralCode || user.username, // Fallback to username
       },
     });
   } catch (err) {
@@ -63,6 +62,10 @@ const registerUser = async (req, res) => {
   const { fullName, email, password, username, referralCode } = req.body;
 
   try {
+    if (username === 'undefined' || typeof username !== 'string') {
+      return res.status(400).json({ message: 'Invalid username' });
+    }
+
     const existingUser = await withRetry(() =>
       User.findOne({
         $or: [{ email }, { username }, { referralCode: username }],
@@ -71,6 +74,7 @@ const registerUser = async (req, res) => {
 
     if (existingUser) {
       if (existingUser.email === email) {
+        return Ascending
         return res.status(400).json({ message: 'Email already exists, please choose another' });
       } else if (existingUser.username === username || existingUser.referralCode === username) {
         return res.status(400).json({ message: 'Username already exists or is used as a referral code' });
@@ -80,11 +84,12 @@ const registerUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     let referredBy = null;
-    if (referralCode) {
-      const referrer = await withRetry(() => User.findOne({ referralCode }));
-      if (referrer) {
-        referredBy = referrer._id;
+    if (referralCode && referralCode !== 'undefined') {
+      const referrer = await withRetry(() => User.findOne({ $or: [{ referralCode }, { username: referralCode }] }));
+      if (!referrer) {
+        return res.status(400).json({ message: 'Invalid referral code' });
       }
+      referredBy = referrer._id;
     }
 
     const newUser = new User({
@@ -155,7 +160,8 @@ const updateUserProfile = async (req, res) => {
       if (existingUser) {
         return res.status(400).json({ message: 'Username or referral code already exists' });
       }
-      user.referralCode = req.body.username;
+      user.username = req.body.username;
+      user.referralCode = req.body.username; // Update referralCode if username changes
     }
 
     await withRetry(() => user.save());
@@ -170,7 +176,7 @@ const updateUserProfile = async (req, res) => {
       contact: user.contact,
       status: user.status,
       profileSet: user.profileSet,
-      referralCode: user.referralCode, // Include referralCode
+      referralCode: user.referralCode || user.username, // Fallback to username
     });
   } catch (err) {
     console.error('Update profile error:', err);
