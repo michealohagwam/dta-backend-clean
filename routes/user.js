@@ -502,4 +502,52 @@ router.get('/ref/:referralCode', async (req, res) => {
   }
 });
 
+router.post('/resend-verification', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    if (user.isVerified) {
+      return res.status(400).json({ message: 'User is already verified' });
+    }
+
+    const verificationToken = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
+
+    const verificationLink = `https://dailytaskacademy.vercel.app/verify-email?token=${verificationToken}`;
+
+    await sendEmail(user.email, 'Verify Your Email', `Click here to verify: ${verificationLink}`);
+
+    res.json({ message: 'Verification email resent successfully' });
+  } catch (err) {
+    console.error('❌ Resend verification error:', err);
+    res.status(500).json({ error: 'Failed to resend verification email' });
+  }
+});
+
+router.post('/reset-password', async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  if (!token || !newPassword) {
+    return res.status(400).json({ error: 'Token and new password are required' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    res.json({ message: 'Password updated successfully' });
+  } catch (err) {
+    console.error('❌ Password reset error:', err);
+    res.status(400).json({ error: 'Invalid or expired token' });
+  }
+});
+
+
 module.exports = router;
