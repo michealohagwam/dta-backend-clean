@@ -20,7 +20,7 @@ const allowedOrigins = [
   'https://dta-admin.vercel.app',
   'https://dailytaskacademy.netlify.app',
   'http://localhost:3000',
-  'http://localhost:3001'
+  'http://localhost:3001',
 ];
 
 // Initialize Socket.IO with CORS
@@ -32,12 +32,11 @@ const io = socketIo(server, {
   },
 });
 
-// Attach io to app for use in routes
+// Attach io to app for access in routes
 app.set('io', io);
 
-
-app.set('trust proxy', 1); // Or 'true'
-// Enable rate limiting for signup route
+// Trust proxy (for cookies, rate limiters, etc.)
+app.set('trust proxy', 1);
 
 // Middleware
 app.use(cors({
@@ -47,7 +46,7 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Base route
+// Base health route
 app.get('/', (req, res) => {
   res.send('✅ DTA Backend is Live!');
 });
@@ -61,14 +60,12 @@ mongoose.connect(process.env.MONGODB_URI, {
 .then(() => console.log('✅ MongoDB Connected'))
 .catch(err => console.error('❌ MongoDB connection error:', err));
 
-// ✅ Routes
-app.use('/api/users', require('./routes/user'));
-app.use('/api/admin', require('./routes/admin'));
+// Routes
+app.use('/api/users', require('./routes/user'));     // Main user routes (signup, login, verify, etc.)
+app.use('/api/admin', require('./routes/admin'));    // Admin-specific routes
+app.use('/api/auth', require('./routes/user'));      // Optional alias to support /api/auth/signup, etc.
 
-// 👇 Add this line to support /api/auth/signup using the same user routes
-app.use('/api/auth', require('./routes/user')); 
-
-// ✅ WebSocket Events
+// WebSocket Events
 io.on('connection', (socket) => {
   console.log('🔌 A user connected');
 
