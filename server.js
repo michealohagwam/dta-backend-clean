@@ -38,13 +38,13 @@ app.set('io', io);
 // Trust proxy (for cookies, rate limiters, etc.)
 app.set('trust proxy', 1);
 
-// Middleware
+// ✅ Middleware
 app.use(cors({
   origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json()); // ✅ Required for parsing JSON bodies from frontend
 
 // Base health route
 app.get('/', (req, res) => {
@@ -60,7 +60,7 @@ mongoose.connect(process.env.MONGODB_URI, {
 .then(() => console.log('✅ MongoDB Connected'))
 .catch(err => console.error('❌ MongoDB connection error:', err));
 
-// Routes
+// ✅ Routes
 app.use('/api/users', require('./routes/user'));     // Main user routes (signup, login, verify, etc.)
 app.use('/api/admin', require('./routes/admin'));    // Admin-specific routes
 app.use('/api/auth', require('./routes/user'));      // Optional alias to support /api/auth/signup, etc.
