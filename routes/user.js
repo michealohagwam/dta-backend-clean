@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 const { authMiddleware } = require('../middleware/auth');
 const sendEmail = require('../utils/sendEmail');
 const Sentry = require('@sentry/node');
+const crypto = require('crypto');
 const User = require('../models/User');
 const PaymentMethod = require('../models/PaymentMethod');
 const Withdrawal = require('../models/Withdrawal');
@@ -525,62 +526,70 @@ router.post('/resend-verification', async (req, res) => {
     console.error('❌ Resend verification error:', err);
     res.status(500).json({ error: 'Failed to resend verification email' });
   }
-// Forgot Password – send reset link
 router.post('/forgot-password', async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ message: 'Email is required' });
-
   try {
-    const user = await withRetry(() => User.findOne({ email }));
-    if (!user) return res.status(404).json({ message: 'No user with that email' });
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: 'Email is required' });
 
-    // Create a JWT valid for, say, 1 hour
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    const resetLink = `https://dailytaskacademy.vercel.app/reset.html?token=${token}`;
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: 'No user found with this email' });
 
-    await sendEmail(
-      email,
-      'Password Reset Request',
-      `<p>Hi ${user.fullName},</p>
-       <p>Click <a href="${resetLink}">here</a> to reset your password (link expires in 1 hour).</p>`
-    );
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
 
-    await withRetry(() => EmailLog.create({ type: 'forgot-password', recipient: email }));
+    // Save hashed token and expiry
+    user.resetToken = hashedToken;
+    user.resetTokenExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
+    await user.save();
 
-    res.json({ message: 'Password reset link sent to your email.' });
+    const resetLink = `https://dailytaskacademy.vercel.app/reset.html?token=${resetToken}`;
+    const message = `
+      <p>You requested a password reset.</p>
+      <p>Click the link below to reset your password:</p>
+      <a href="${resetLink}" target="_blank">${resetLink}</a>
+      <p>This link expires in 10 minutes.</p>
+    `;
+
+    await sendEmail(email, 'Reset Your Password - DailyTask Academy', message);
+
+    res.status(200).json({ message: 'Reset link sent to your email.' });
   } catch (err) {
-    Sentry.captureException(err);
     console.error('Forgot password error:', err);
-    res.status(500).json({ message: 'Server error. Please try again.' });
+    Sentry.captureException(err);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
 
-// Reset Password
-
 router.post('/reset-password', async (req, res) => {
-  const { token, newPassword } = req.body;
-  if (!token || !newPassword) return res.status(400).json({ message: 'Token and new password required' });
-
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await withRetry(() => User.findById(payload.userId));
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) {
+      return res.status(400).json({ message: 'Token and new password are required' });
+    }
 
-    user.password = await bcrypt.hash(newPassword, 10);
-    await withRetry(() => user.save());
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
 
-    await sendEmail(
-      user.email,
-      'Your Password Has Been Reset',
-      `<p>Hello ${user.fullName},</p><p>Your password was successfully updated.</p>`
-    );
+    const user = await User.findOne({
+      resetToken: hashedToken,
+      resetTokenExpiry: { $gt: Date.now() }
+    });
 
-    res.json({ message: 'Password has been reset successfully.' });
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 12);
+    user.resetToken = undefined;
+    user.resetTokenExpiry = undefined;
+    await user.save();
+
+    res.status(200).json({ message: 'Password reset successful' });
   } catch (err) {
     console.error('Reset password error:', err);
-    const status = err.name === 'TokenExpiredError' ? 400 : 500;
-    res.status(status).json({ message: err.name === 'TokenExpiredError' ? 'Reset token expired' : 'Server error' });
+    Sentry.captureException(err);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 

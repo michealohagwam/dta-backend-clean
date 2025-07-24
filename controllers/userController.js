@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sendEmail = require('../utils/sendEmail');
 const Sentry = require('@sentry/node');
+const crypto = require('crypto');
 
 // Retry Logic for Database Operations
 async function withRetry(fn, retries = 3, delay = 1000) {
@@ -337,6 +338,77 @@ const notifyWithdrawal = async (user, amount) => {
   }
 };
 
+
+// @desc    Forgot password
+// @route   POST /api/users/forgot-password
+// @access  Public
+const forgotPassword = async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const user = await withRetry(() => User.findOne({ email }));
+    if (!user) return res.status(404).json({ message: 'No user found with that email' });
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+    const resetTokenExpiry = Date.now() + 15 * 60 * 1000; // 15 minutes
+
+    user.resetToken = resetTokenHash;
+    user.resetTokenExpiry = resetTokenExpiry;
+    await withRetry(() => user.save());
+
+    const resetUrl = `${process.env.CLIENT_URL}/reset-password.html?token=${resetToken}`;
+    await sendEmail(
+      email,
+      'Password Reset Request',
+      `<p>You requested a password reset.</p><p>Click <a href="${resetUrl}">here</a> to reset your password. This link expires in 15 minutes.</p>`
+    );
+
+    res.json({ message: 'Reset link sent to email if it exists' });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    Sentry.captureException(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Reset password
+// @route   POST /api/users/reset-password
+// @access  Public
+const resetPassword = async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  try {
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    const user = await withRetry(() =>
+      User.findOne({
+        resetToken: hashedToken,
+        resetTokenExpiry: { $gt: Date.now() },
+      })
+    );
+
+    if (!user) return res.status(400).json({ message: 'Invalid or expired token' });
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.resetToken = undefined;
+    user.resetTokenExpiry = undefined;
+    await withRetry(() => user.save());
+
+    await sendEmail(
+      user.email,
+      'Password Reset Successful',
+      `<p>Hello ${user.fullName},</p><p>Your password has been successfully reset.</p>`
+    );
+
+    res.json({ message: 'Password reset successful' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    Sentry.captureException(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+
 module.exports = {
   loginUser,
   registerUser,
@@ -348,4 +420,6 @@ module.exports = {
   updatePaymentMethod,
   deletePaymentMethod,
   getReferralStats,
+  forgotPassword,
+  resetPassword,
 };

@@ -1,4 +1,3 @@
-// models/User.js
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema(
@@ -12,6 +11,11 @@ const userSchema = new mongoose.Schema(
     level: { type: Number, default: 1 },
     status: { type: String, enum: ['pending', 'verified', 'active', 'suspended'], default: 'pending' },
     verificationCode: { type: String },
+
+    // 💡 New fields for secure password reset
+    resetToken: { type: String },
+    resetTokenExpiry: { type: Date },
+
     balance: {
       available: { type: Number, default: 0 },
       pending: { type: Number, default: 0 },
@@ -25,7 +29,7 @@ const userSchema = new mongoose.Schema(
     contact: { type: String },
     transactions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Withdrawal' }],
     paymentMethods: [{ type: mongoose.Schema.Types.ObjectId, ref: 'PaymentMethod' }],
-    referrals: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Fixed to reference User
+    referrals: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     upgrades: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Upgrade' }],
     lastTaskDate: { type: String },
   },
