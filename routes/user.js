@@ -591,10 +591,5 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
-  } catch (err) {
-    console.error('❌ Resend verification error:', err);
-    Sentry.captureException(err);
-    res.status(500).json({ message: 'Failed to resend verification email' });
-  }
-});
+
 module.exports = router;
