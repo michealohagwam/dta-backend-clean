@@ -535,11 +535,9 @@ router.post('/forgot-password', async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: 'No user found with this email' });
 
-    // Generate reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
 
-    // Save hashed token and expiry
     user.resetToken = hashedToken;
     user.resetTokenExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
     await user.save();
@@ -561,7 +559,6 @@ router.post('/forgot-password', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 router.post('/reset-password', async (req, res) => {
   try {
@@ -594,4 +591,10 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+  } catch (err) {
+    console.error('❌ Resend verification error:', err);
+    Sentry.captureException(err);
+    res.status(500).json({ message: 'Failed to resend verification email' });
+  }
+});
 module.exports = router;
