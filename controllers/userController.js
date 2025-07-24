@@ -358,10 +358,13 @@ const forgotPassword = async (req, res) => {
     await withRetry(() => user.save());
 
     const resetUrl = `${process.env.CLIENT_URL}/reset-password.html?token=${resetToken}`;
+    console.log('🔗 Reset URL:', resetUrl); // ✅ LOG IT HERE
+
     await sendEmail(
       email,
       'Password Reset Request',
-      `<p>You requested a password reset.</p><p>Click <a href="${resetUrl}">here</a> to reset your password. This link expires in 15 minutes.</p>`
+      `<p>You requested a password reset.</p>
+       <p>Click <a href="${resetUrl}">here</a> to reset your password. This link expires in 15 minutes.</p>`
     );
 
     res.json({ message: 'Reset link sent to email if it exists' });
