@@ -526,6 +526,7 @@ router.post('/resend-verification', async (req, res) => {
     console.error('❌ Resend verification error:', err);
     res.status(500).json({ error: 'Failed to resend verification email' });
   }
+
 router.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
@@ -593,6 +594,4 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
-}
-);
 module.exports = router;
