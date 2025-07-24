@@ -525,51 +525,65 @@ router.post('/resend-verification', async (req, res) => {
     console.error('❌ Resend verification error:', err);
     res.status(500).json({ error: 'Failed to resend verification email' });
   }
+// Forgot Password – send reset link
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: 'Email is required' });
+
+  try {
+    const user = await withRetry(() => User.findOne({ email }));
+    if (!user) return res.status(404).json({ message: 'No user with that email' });
+
+    // Create a JWT valid for, say, 1 hour
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    const resetLink = `https://dailytaskacademy.vercel.app/reset.html?token=${token}`;
+
+    await sendEmail(
+      email,
+      'Password Reset Request',
+      `<p>Hi ${user.fullName},</p>
+       <p>Click <a href="${resetLink}">here</a> to reset your password (link expires in 1 hour).</p>`
+    );
+
+    await withRetry(() => EmailLog.create({ type: 'forgot-password', recipient: email }));
+
+    res.json({ message: 'Password reset link sent to your email.' });
+  } catch (err) {
+    Sentry.captureException(err);
+    console.error('Forgot password error:', err);
+    res.status(500).json({ message: 'Server error. Please try again.' });
+  }
 });
+
+
+// Reset Password
 
 router.post('/reset-password', async (req, res) => {
   const { token, newPassword } = req.body;
-
-  if (!token || !newPassword) {
-    return res.status(400).json({ error: 'Token and new password are required' });
-  }
+  if (!token || !newPassword) return res.status(400).json({ message: 'Token and new password required' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await withRetry(() => User.findById(payload.userId));
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
     user.password = await bcrypt.hash(newPassword, 10);
-    await user.save();
+    await withRetry(() => user.save());
 
-    res.json({ message: 'Password updated successfully' });
+    await sendEmail(
+      user.email,
+      'Your Password Has Been Reset',
+      `<p>Hello ${user.fullName},</p><p>Your password was successfully updated.</p>`
+    );
+
+    res.json({ message: 'Password has been reset successfully.' });
   } catch (err) {
-    console.error('❌ Password reset error:', err);
-    res.status(400).json({ error: 'Invalid or expired token' });
+    console.error('Reset password error:', err);
+    const status = err.name === 'TokenExpiredError' ? 400 : 500;
+    res.status(status).json({ message: err.name === 'TokenExpiredError' ? 'Reset token expired' : 'Server error' });
   }
 });
 
-router.post('/reset-password', async (req, res) => {
-  const { token, newPassword } = req.body;
-
-  if (!token || !newPassword) {
-    return res.status(400).json({ error: 'Token and new password are required' });
-  }
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    user.password = await bcrypt.hash(newPassword, 10);
-    await user.save();
-
-    res.json({ message: 'Password updated successfully' });
-  } catch (err) {
-    console.error('❌ Password reset error:', err);
-    res.status(400).json({ error: 'Invalid or expired token' });
-  }
-});
-
-
+}
+);
 module.exports = router;
