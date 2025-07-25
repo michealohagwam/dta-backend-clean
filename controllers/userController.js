@@ -381,8 +381,13 @@ const forgotPassword = async (req, res) => {
 const resetPassword = async (req, res) => {
   const { token, newPassword } = req.body;
 
+  if (!token || !newPassword) {
+    return res.status(400).json({ message: 'Token and new password are required' }); // ✅ Added input check
+  }
+
   try {
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
     const user = await withRetry(() =>
       User.findOne({
         resetToken: hashedToken,
@@ -390,9 +395,11 @@ const resetPassword = async (req, res) => {
       })
     );
 
-    if (!user) return res.status(400).json({ message: 'Invalid or expired token' });
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
 
-    user.password = await bcrypt.hash(newPassword, 10);
+    user.password = await bcrypt.hash(newPassword, 12); // ✅ Use stronger salt rounds
     user.resetToken = undefined;
     user.resetTokenExpiry = undefined;
     await withRetry(() => user.save());
@@ -403,13 +410,17 @@ const resetPassword = async (req, res) => {
       `<p>Hello ${user.fullName},</p><p>Your password has been successfully reset.</p>`
     );
 
-    res.json({ message: 'Password reset successful' });
+    res.status(200).json({
+      message: 'Password reset successful',
+      email: user.email, // ✅ Helpful for frontend auto-login if needed
+    });
   } catch (err) {
     console.error('Reset password error:', err);
     Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
 };
+
 
 
 module.exports = {
