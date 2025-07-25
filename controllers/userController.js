@@ -375,47 +375,38 @@ const forgotPassword = async (req, res) => {
   }
 };
 
-// @desc    Reset password
-// @route   POST /api/users/reset-password
+// @desc    Send password reset email
+// @route   POST /api/users/forgot-password
 // @access  Public
-const resetPassword = async (req, res) => {
-  const { token, newPassword } = req.body;
-
-  if (!token || !newPassword) {
-    return res.status(400).json({ message: 'Token and new password are required' }); // ✅ Added input check
-  }
+const forgotPassword = async (req, res) => {
+  const { email } = req.body;
 
   try {
+    const user = await withRetry(() => User.findOne({ email }));
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const token = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    const expiry = Date.now() + 1000 * 60 * 30; // 30 minutes
 
-    const user = await withRetry(() =>
-      User.findOne({
-        resetToken: hashedToken,
-        resetTokenExpiry: { $gt: Date.now() },
-      })
-    );
-
-    if (!user) {
-      return res.status(400).json({ message: 'Invalid or expired token' });
-    }
-
-    user.password = await bcrypt.hash(newPassword, 12); // ✅ Use stronger salt rounds
-    user.resetToken = undefined;
-    user.resetTokenExpiry = undefined;
+    user.resetToken = hashedToken;
+    user.resetTokenExpiry = expiry;
     await withRetry(() => user.save());
+
+    const resetLink = `https://dailytaskacademy.vercel.app/reset.html?token=${token}&email=${encodeURIComponent(user.email)}`;
 
     await sendEmail(
       user.email,
-      'Password Reset Successful',
-      `<p>Hello ${user.fullName},</p><p>Your password has been successfully reset.</p>`
+      'Reset your password',
+      `<p>Hello ${user.fullName},</p>
+       <p>You requested a password reset. Click the link below to reset it:</p>
+       <p><a href="${resetLink}">${resetLink}</a></p>
+       <p>This link will expire in 30 minutes.</p>`
     );
 
-    res.status(200).json({
-      message: 'Password reset successful',
-      email: user.email, // ✅ Helpful for frontend auto-login if needed
-    });
+    res.json({ message: 'Reset link sent' });
   } catch (err) {
-    console.error('Reset password error:', err);
+    console.error('Forgot password error:', err);
     Sentry.captureException(err);
     res.status(500).json({ message: 'Server error' });
   }
