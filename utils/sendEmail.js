@@ -1,8 +1,8 @@
+// utils/sendEmail.js
 const nodemailer = require('nodemailer');
 
 const sendEmail = async (to, subject, html) => {
   try {
-    // Create transporter
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
@@ -11,37 +11,32 @@ const sendEmail = async (to, subject, html) => {
       },
     });
 
-    // Verify transporter works before sending (once, optional)
+    // Optional: verify connection (can be removed in production)
     transporter.verify((error, success) => {
       if (error) {
         console.error('❌ SMTP Error:', error);
       } else {
-        console.log('✅ SMTP Server is ready to send messages');
+        console.log('✅ SMTP server ready');
       }
     });
 
     const mailOptions = {
-      from: `"DailyTask Academy" <${process.env.EMAIL_USER}>`, // ✅ Authenticated sender
+      from: `"DailyTask Academy" <${process.env.EMAIL_USER}>`,
       to,
       subject,
       html,
     };
 
-    // Send email and log full response
     const info = await transporter.sendMail(mailOptions);
-    console.log('📬 Email sent:', info.response); // Gmail response
+    console.log('📬 Email sent:', info.response);
 
-    // Optional extra logs for dev
     if (process.env.NODE_ENV === 'development') {
       console.log('📦 Full send info:', info);
-      console.log('📧 To:', to);
-      console.log('📝 Subject:', subject);
-      console.log('📄 HTML Content:', html);
     }
 
   } catch (error) {
     console.error('❌ Email send error:', error.message);
-    console.error(error);
+    throw error;
   }
 };
 
